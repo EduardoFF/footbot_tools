@@ -31,3 +31,4 @@ build*
 *.app
 
 *.pyc
+*.log

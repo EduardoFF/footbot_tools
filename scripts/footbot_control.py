@@ -25,6 +25,7 @@ from configmsg import config_msg_t
 import tf2_ros
 import tf2_geometry_msgs
 from tf.transformations import euler_from_quaternion
+from remote_control import RemoteCtrl
 #############################################################
 #############################################################
 
@@ -61,10 +62,15 @@ class FootbotControl(object):
         self.stop_topic = rospy.get_param("~stop", "stop")
 
         self.lcm = lcm.LCM(self.lcm_url )
+        self.rc = RemoteCtrl(self.robots)
+        self.rc.controllerprg="footbot_jacopo_api -i footbot_jacopo_api"
+        self.rc.controllerscript="/home/root/manet/controllers/xml/ros_footbot/fb.xml"
+
         self.rate = rospy.get_param("~rate", 5)
         print "rate = ",self.rate
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.launch_controllers()
         for rid in self.robots:
             print "created subscribers for ",rid
             rospy.Subscriber("footbot_%d/%s"%(rid,self.tgt_topic), \
@@ -75,8 +81,27 @@ class FootbotControl(object):
                              callback_args=rid)
 
 
+
         
+    def launch_controllers(self):
+        for i in self.robots:
+            self.rc.do_checkhostalive(i)
+            print "alive ",i,"?",self.rc.hostalive(i)
+            if self.rc.hostalive(i):
+                self.rc.do_checkcontroller(i)
+                if not self.rc.controllerok[i]:
+                    self.rc.do_runcontroller(i)
+    def stop_controllers(self):
+        for i in self.robots:
+            if self.rc.hostalive(i) and self.rc.controllerok[i]:
+                for j in range(3):
+                    self.publishStop(i)
+                    self.publishNamedBeaconColor(i, 'black')
+                    rospy.sleep(0.5)
+                self.rc.do_stopcontroller(i)
+                    
         
+
     #############################################################
     def spin(self):
     #############################################################
@@ -93,6 +118,9 @@ class FootbotControl(object):
             r.sleep()
             #print "sleep over"
             self.ticks_since_start +=1
+            if self.ticks_since_start%30 == 0:
+                self.launch_controllers()
+        self.stop_controllers()
              
 
     #############################################################
@@ -121,6 +149,13 @@ class FootbotControl(object):
         msg.robotid = rid
         msg.timestamp = 0
         msg.msg = "FORCE_STOP"
+        self.lcm.publish("CONFIG", msg.encode())
+    def publishNamedBeaconColor(self, rid, colorname):
+        # testing
+        msg = config_msg_t()
+        msg.robotid = rid
+        msg.timestamp = 0
+        msg.msg = "FORCE_BEACON %s"% (colorname)
         self.lcm.publish("CONFIG", msg.encode())
 
     
