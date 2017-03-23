@@ -16,6 +16,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+"""
+TODOS
+parallelize shutdown
+"""
+
 import rospy
 import roslib
 from geometry_msgs.msg import PoseStamped
@@ -26,6 +31,9 @@ import tf2_ros
 import tf2_geometry_msgs
 from tf.transformations import euler_from_quaternion
 from remote_control import RemoteCtrl
+from std_msgs.msg import ColorRGBA
+import math
+import time
 #############################################################
 #############################################################
 
@@ -55,11 +63,15 @@ class FootbotControl(object):
         rospy.loginfo("%s started" % nodename)
         self.message_counter =0
         self.last_pos ={}
+        self.last_rgb ={}
+        self.abort = False
     
         self.tgt_topic = rospy.get_param("~target", "target_pose")
         self.robots = rospy.get_param("~robots", rospy.get_param('/robots', []))
         self.lcm_url = rospy.get_param("~lcm_url","udpm://239.255.76.67:7667?ttl=1,transmit_only=true" )
         self.stop_topic = rospy.get_param("~stop", "stop")
+        self.do_launch = rospy.get_param("~do_launch", 1)
+        self.beaconcolor_topic = rospy.get_param("~beacon", "set_beacon")
 
         self.lcm = lcm.LCM(self.lcm_url )
         self.rc = RemoteCtrl(self.robots)
@@ -70,7 +82,9 @@ class FootbotControl(object):
         print "rate = ",self.rate
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-        self.launch_controllers()
+        if self.do_launch:
+            print "automatic launching is enabled"
+            self.launch_controllers()
         for rid in self.robots:
             print "created subscribers for ",rid
             rospy.Subscriber("footbot_%d/%s"%(rid,self.tgt_topic), \
@@ -79,12 +93,21 @@ class FootbotControl(object):
             rospy.Subscriber("footbot_%d/%s"%(rid,self.stop_topic), \
                              Empty, self.stopCallback,
                              callback_args=rid)
-        rospy.Timer(rospy.Duration(5), self.launch_controllers)
+            rospy.Subscriber("footbot_%d/%s"%(rid,self.beaconcolor_topic), \
+                             ColorRGBA, self.beaconcolorCallback,
+                             callback_args=rid)
+
+        if self.do_launch:
+            rospy.Timer(rospy.Duration(5), self.launch_controller_cb)
 
 
 
-        
+
+    def launch_controller_cb(self, event):
+        self.launch_controllers();
     def launch_controllers(self):
+        if self.abort:
+            return
         for i in self.robots:
             self.rc.do_checkhostalive(i)
             print "alive ",i,"?",self.rc.hostalive(i)
@@ -98,13 +121,18 @@ class FootbotControl(object):
                     print "launch ..."
                     self.rc.do_runcontroller(i)
     def stop_controllers(self):
+        self.abort = True
         for i in self.robots:
             if self.rc.hostalive(i) and self.rc.controllerok[i]:
                 for j in range(3):
                     self.publishStop(i)
                     self.publishNamedBeaconColor(i, 'black')
-                    rospy.sleep(1.0)
+                print "sleeping"
+                time.sleep(1.0)
+                print "sleep done"
                 self.rc.do_stopcontroller(i)
+                time.sleep(1.0)
+                self.rc.do_resurrect(i)
                     
         
 
@@ -124,9 +152,8 @@ class FootbotControl(object):
             r.sleep()
             #print "sleep over"
             self.ticks_since_start +=1
-            if self.ticks_since_start%30 == 0:
-                self.launch_controllers()
-        self.stop_controllers()
+        if self.do_launch:
+            self.stop_controllers()
              
 
     #############################################################
@@ -139,6 +166,8 @@ class FootbotControl(object):
                 self.publishStop(rid)
             else:
                 self.publishLastTarget(rid, pos)
+        for (rid, color) in self.last_rgb.items():
+                self.publishRGBBeaconColor(rid, color)
 
     def publishLastTarget(self, rid, pos):
         # testing
@@ -164,6 +193,23 @@ class FootbotControl(object):
         msg.msg = "FORCE_BEACON %s"% (colorname)
         self.lcm.publish("CONFIG", msg.encode())
 
+    def publishRGBBeaconColor(self, rid, (r,g,b,a)):
+        # testing
+        msg = config_msg_t()
+        msg.robotid = rid
+        msg.timestamp = 0
+        r = max(min(r,1.0),0)
+        g = max(min(g,1.0),0)
+        b = max(min(b,1.0),0)
+        a = max(min(a,1.0),0)        
+        ur = int(min(math.ceil(r*255.0),255))
+        ug = int(min(math.ceil(g*255.0),255))
+        ub = int(min(math.ceil(b*255.0),255))
+        ua = int(min(math.ceil(a*255.0),255))
+        msg.msg = "FORCE_BEACON_RGBA %d %d %d %d"% (ur, ug, ub, ua)
+        self.lcm.publish("CONFIG", msg.encode())
+
+
     
     #############################################################
     def targetCallback(self,msg, rid):
@@ -186,6 +232,12 @@ class FootbotControl(object):
     ############################################################
         print "STOPPPPPPP"
         self.last_pos[rid] = None
+
+    def beaconcolorCallback(self,msg, rid):
+        ############################################################
+        print "Beacon Color ",(msg.r, msg.g, msg.b, msg.a)
+        self.last_rgb[rid] = (msg.r, msg.g, msg.b, msg.a)
+
 
 #############################################################
 #############################################################
