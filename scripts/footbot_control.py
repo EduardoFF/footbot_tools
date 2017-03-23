@@ -79,6 +79,7 @@ class FootbotControl(object):
             rospy.Subscriber("footbot_%d/%s"%(rid,self.stop_topic), \
                              Empty, self.stopCallback,
                              callback_args=rid)
+        rospy.Timer(rospy.Duration(5), self.launch_controllers)
 
 
 
@@ -90,6 +91,11 @@ class FootbotControl(object):
             if self.rc.hostalive(i):
                 self.rc.do_checkcontroller(i)
                 if not self.rc.controllerok[i]:
+                    print "controller is down on robot ",i
+                    print "attempting to launch controller on robot ",i
+                    print "resurrect ..."
+                    self.rc.do_resurrect(i)
+                    print "launch ..."
                     self.rc.do_runcontroller(i)
     def stop_controllers(self):
         for i in self.robots:
@@ -97,7 +103,7 @@ class FootbotControl(object):
                 for j in range(3):
                     self.publishStop(i)
                     self.publishNamedBeaconColor(i, 'black')
-                    rospy.sleep(0.5)
+                    rospy.sleep(1.0)
                 self.rc.do_stopcontroller(i)
                     
         
